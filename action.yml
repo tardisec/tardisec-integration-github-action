@@ -1,0 +1,56 @@
+name: tardisec sync
+description: Pull tardisec security config files and open a pull request
+branding:
+  icon: shield
+  color: purple
+
+inputs:
+  domain:
+    description: Domain the config belongs to, as configured on app.tardisec.com
+    required: true
+  files:
+    description: Space-separated config filenames to pull
+    default: .tardisec.json
+  api:
+    description: API origin, also the OIDC audience
+    default: https://api.tardisec.com
+  pull-request:
+    description: Commit changes to the tardisec-config branch and open a pull request
+    default: "true"
+  token:
+    description: Token used to push the branch and open the pull request
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Fetch config
+      shell: bash
+      env:
+        TARDISEC_API: ${{ inputs.api }}
+        TARDISEC_DOMAIN: ${{ inputs.domain }}
+        TARDISEC_FILES: ${{ inputs.files }}
+      run: |
+        OIDC=$(curl -sSf -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${TARDISEC_API}" | jq -r .value)
+        for file in ${TARDISEC_FILES}; do
+          curl -sSf -H "Authorization: Bearer ${OIDC}" \
+            -o "${file}" "${TARDISEC_API}/v1/config-action/${TARDISEC_DOMAIN}/${file}"
+        done
+
+    - name: Open pull request
+      if: inputs.pull-request == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        git add -A
+        git diff --cached --quiet && exit 0
+        git config user.name TardiSecBot
+        git config user.email security+github-action@tardisec.com
+        git switch -C tardisec-config
+        git commit -m "chore: sync tardisec config"
+        git push -f origin tardisec-config
+        gh pr create --title "chore: sync tardisec config" \
+          --body "Automated config sync from tardisec.com." \
+          --base "${GITHUB_REF_NAME}" || true  # PR exists → push -f already updated it

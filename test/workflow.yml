@@ -1,0 +1,19 @@
+# act-only workflow: runs the local action against test/mock-api.js. See test/e2e.sh.
+name: e2e
+on: push
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
+        with:
+          domain: example.com
+          files: .tardisec.json .tardisec.sveltekit.json
+          api: http://host.docker.internal:8787
+          pull-request: "false"
+      - name: Assert fetched files
+        run: |
+          jq -e '.http.headers."X-Content-Type-Options" == "nosniff"' .tardisec.json
+          jq -e '.dns.txt[0] == "tardisec-verification=vrfy1234"' .tardisec.json
+          jq -e '.csp.directives' .tardisec.sveltekit.json
