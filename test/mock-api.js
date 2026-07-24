@@ -37,7 +37,7 @@ createServer((req, res) => {
 		res.end(JSON.stringify({ value: OIDC_TOKEN }));
 		return;
 	}
-	const match = url.pathname.match(/^\/v1\/config-action\/example\.com\/(.+)$/);
+	const match = url.pathname.match(/^\/v1\/recommendation\/example\.com\/(.+)$/);
 	const body = match && files[match[1]];
 	if (!body) {
 		res.writeHead(404).end();

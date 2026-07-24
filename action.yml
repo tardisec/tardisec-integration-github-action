@@ -35,7 +35,7 @@ runs:
           "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${TARDISEC_API}" | jq -r .value)
         for file in ${TARDISEC_FILES}; do
           curl -sSf -H "Authorization: Bearer ${OIDC}" \
-            -o "${file}" "${TARDISEC_API}/v1/config-action/${TARDISEC_DOMAIN}/${file}"
+            -o "${file}" "${TARDISEC_API}/v1/recommendation/${TARDISEC_DOMAIN}/${file}"
         done
 
     - name: Open pull request
