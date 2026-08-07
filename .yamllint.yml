@@ -1,0 +1,20 @@
+# yamllint for config-only repos. Every rule not listed below stays at the default
+# error level, so this gate can actually fail.
+# https://yamllint.readthedocs.io/en/stable/rules.html
+extends: default
+
+rules:
+  # Pipeline YAML embeds shell one-liners and JSON request bodies that cannot be
+  # wrapped without changing what they mean.
+  line-length: disable
+  # action.yml, orb.yml, pipe.yml and plugin.yml are single documents by definition,
+  # and the one multi-document file (a GitLab component spec) separates its own docs.
+  document-start: disable
+  # GitHub, Forgejo and Buildkite key workflows on `on:`, which YAML 1.1 reads as the
+  # boolean true. Values are still checked, only keys are exempt.
+  truthy:
+    check-keys: false
+  # Actions and images are pinned as `uses: owner/repo@<sha> # v1.2.3`, one space before
+  # the tag the SHA stands for. Every other comment option stays at its default.
+  comments:
+    min-spaces-from-content: 1

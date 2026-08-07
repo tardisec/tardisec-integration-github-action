@@ -7,7 +7,7 @@ const files = {
 	".tardisec.json": JSON.stringify(
 		{
 			$schema: "https://tardisec.com/schemas/0.0.0/schema.json",
-			dns: { txt: ["tardisec-verification=vrfy1234"] },
+			dns: { TXT: { "": ["tardisec-verification=vrfy1234"] } },
 			http: {
 				headers: {
 					"Content-Security-Policy": "default-src 'self'",
@@ -23,6 +23,9 @@ const files = {
 		null,
 		4,
 	),
+	// Allowlisted name that carries a slash, so the fetch loop has to create the directory.
+	// Served verbatim as the bare id, no `tardisec-verification=` prefix (config-files.js).
+	".well-known/tardisec-verification.txt": "vrfy1234\n",
 };
 
 createServer((req, res) => {

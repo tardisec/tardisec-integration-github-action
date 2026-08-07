@@ -9,11 +9,19 @@ jobs:
       - uses: ./
         with:
           domain: example.com
-          files: .tardisec.json .tardisec.sveltekit.json
+          files: |
+            .tardisec.json
+            .tardisec.sveltekit.json
+            .well-known/tardisec-verification.txt
+          path: config/tardisec
           api: http://host.docker.internal:8787
           pull-request: "false"
       - name: Assert fetched files
         run: |
+          test ! -e .tardisec.json  # path input moved them off the repo root
+          cd config/tardisec
           jq -e '.http.headers."X-Content-Type-Options" == "nosniff"' .tardisec.json
-          jq -e '.dns.txt[0] == "tardisec-verification=vrfy1234"' .tardisec.json
+          jq -e '.dns.TXT[""][0] == "tardisec-verification=vrfy1234"' .tardisec.json
           jq -e '.csp.directives' .tardisec.sveltekit.json
+          # Slash in the name: the dir was created, and the body is the bare id, written verbatim.
+          test "$(cat .well-known/tardisec-verification.txt)" = vrfy1234

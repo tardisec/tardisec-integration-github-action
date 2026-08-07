@@ -9,8 +9,11 @@ inputs:
     description: Domain the config belongs to, as configured on app.tardisec.com
     required: true
   files:
-    description: Space-separated config filenames to pull
+    description: Config filenames to pull, one per line
     default: .tardisec.json
+  path:
+    description: Directory to write the files into, relative to the repo root
+    default: "."
   api:
     description: API origin, also the OIDC audience
     default: https://api.tardisec.com
@@ -30,12 +33,16 @@ runs:
         TARDISEC_API: ${{ inputs.api }}
         TARDISEC_DOMAIN: ${{ inputs.domain }}
         TARDISEC_FILES: ${{ inputs.files }}
+        TARDISEC_PATH: ${{ inputs.path }}
       run: |
         OIDC=$(curl -sSf -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
           "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${TARDISEC_API}" | jq -r .value)
+        # The path is prepended locally only; the URL always uses the allowlisted name, which
+        # may itself contain a slash (.well-known/tardisec-verification.txt), hence the dirname.
         for file in ${TARDISEC_FILES}; do
+          mkdir -p "$(dirname "${TARDISEC_PATH}/${file}")"
           curl -sSf -H "Authorization: Bearer ${OIDC}" \
-            -o "${file}" "${TARDISEC_API}/v1/recommendation/${TARDISEC_DOMAIN}/${file}"
+            -o "${TARDISEC_PATH}/${file}" "${TARDISEC_API}/v1/recommendation/${TARDISEC_DOMAIN}/${file}"
         done
 
     - name: Open pull request
@@ -43,14 +50,42 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
+        BRANCH: tardisec-config
       run: |
-        git add -A
+        git add -A  # unscoped: picks up every earlier fetch step, whatever its path
         git diff --cached --quiet && exit 0
-        git config user.name TardiSecBot
-        git config user.email security+github-action@tardisec.com
-        git switch -C tardisec-config
-        git commit -m "chore: sync tardisec config"
-        git push -f origin tardisec-config
-        gh pr create --title "chore: sync tardisec config" \
-          --body "Automated config sync from tardisec.com." \
-          --base "${GITHUB_REF_NAME}" || true  # PR exists → push -f already updated it
+
+        # Commit through the API: GitHub signs it server-side, so no key on the runner and no
+        # secret to store. The token's identity is the author, so derive the DCO signoff from it
+        # (installation tokens can't read /user, hence the github-actions[bot] fallback).
+        read -r LOGIN ID <<<"$(gh api user --jq '"\(.login) \(.id)"' 2>/dev/null \
+          || echo 'github-actions[bot] 41898282')"
+        BASE_OID=$(git rev-parse HEAD)
+
+        additions=$(git diff --cached --name-only | while IFS= read -r file; do
+          jq -n --arg path "${file}" --arg contents "$(base64 "${file}" | tr -d '\n')" '$ARGS.named'
+        done | jq -sc .)
+
+        # Reset the branch to the base commit, as the old force-push did; keeps re-runs to one commit.
+        gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
+          -f sha="${BASE_OID}" -F force=true >/dev/null 2>&1 \
+          || gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+               -f ref="refs/heads/${BRANCH}" -f sha="${BASE_OID}" >/dev/null
+
+        jq -n --arg repo "${GITHUB_REPOSITORY}" --arg branch "${BRANCH}" --arg oid "${BASE_OID}" \
+          --arg body "Signed-off-by: ${LOGIN} <${ID}+${LOGIN}@users.noreply.github.com>" \
+          --argjson additions "${additions}" \
+          '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+            variables: {input: {
+              branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+              expectedHeadOid: $oid,
+              message: {headline: "chore: sync tardisec config", body: $body},
+              fileChanges: {additions: $additions}}}}' \
+          | gh api graphql --input - >/dev/null
+
+        if [ -z "$(gh pr list --head "${BRANCH}" --base "${GITHUB_REF_NAME}" --state open \
+                     --json number --jq '.[0].number')" ]; then
+          gh pr create --title "chore: sync tardisec config" --head "${BRANCH}" \
+            --body "Automated config sync from tardisec.com." \
+            --base "${GITHUB_REF_NAME}"
+        fi  # else the commit above already updated the open PR

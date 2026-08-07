@@ -27,36 +27,67 @@ on:
     - cron: "0 6 * * 1"
   workflow_dispatch: {}
 
-permissions:
-  id-token: write       # mint the OIDC token tardisec verifies
-  contents: write       # push the sync branch
-  pull-requests: write  # open the PR
+permissions: {}
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+    permissions:
+      id-token: write       # mint the OIDC token tardisec verifies
+      contents: write       # create the sync branch and commit
+      pull-requests: write  # open the PR
     steps:
-      - uses: actions/checkout@v4
-      - uses: tardisec/integration-github-action@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false  # nothing is pushed; the commit goes over the API
+      - uses: tardisec/integration-github-action@0000000000000000000000000000000000000000 # v1
         with:
           domain: example.com
-          files: .tardisec.sveltekit.json
+          files: |
+            .tardisec.json
+            .tardisec.sveltekit.json
 ```
 
-`files` is space-separated; see the
+Pin the `0000…` placeholder to the sha of the `v1` tag; the examples are written so
+[zizmor](https://docs.zizmor.sh) passes them clean.
+
+`files` is one filename per line; see the
 [integration list](https://github.com/tardisec/integration-template) for available
-filenames. Runs weekly and on demand; when nothing changed, no PR. Re-runs force-push the
-same `tardisec-config` branch, so an open PR just updates.
+filenames. Runs weekly and on demand; when nothing changed, no PR. Re-runs reset the same
+`tardisec-config` branch, so an open PR just updates.
+
+`path` applies to every file in the block, so files that belong in different directories
+need a block each. A static site publishing `.well-known/` out of `static/`:
+
+```yaml
+      - uses: tardisec/integration-github-action@0000000000000000000000000000000000000000 # v1
+        with:
+          domain: example.com
+          files: .tardisec.json
+          pull-request: "false"   # let the last block open the PR
+      - uses: tardisec/integration-github-action@0000000000000000000000000000000000000000 # v1
+        with:
+          domain: example.com
+          files: .well-known/tardisec-verification.txt
+          path: static
+```
+
+The PR step stages everything, so both blocks land in one commit.
+
+The commit is created through GitHub's API rather than pushed from the runner, so it is
+**Verified** (signed server-side, still no secret to store) and carries a `Signed-off-by`
+trailer for DCO.
 
 ## Inputs
 
 | Input          | Default                    |                                              |
 | -------------- | -------------------------- | -------------------------------------------- |
 | `domain`       | — (required)               | Domain as configured on app.tardisec.com     |
-| `files`        | `.tardisec.json`           | Space-separated config filenames             |
+| `files`        | `.tardisec.json`           | Config filenames, one per line               |
+| `path`         | `.`                        | Directory to write them into                 |
 | `api`          | `https://api.tardisec.com` | API origin / OIDC audience                   |
 | `pull-request` | `true`                     | Set `false` to only fetch the files          |
-| `token`        | `${{ github.token }}`      | Token for branch push + PR create            |
+| `token`        | `${{ github.token }}`      | Token for the commit + PR create             |
 
 ## Test
 
