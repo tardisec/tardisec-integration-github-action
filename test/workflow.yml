@@ -14,13 +14,15 @@ jobs:
             .tardisec.sveltekit.json
             .well-known/tardisec-verification.txt
           path: /config/tardisec/   # leading and trailing slashes are normalized away
+          format: sed -i s/nosniff/NOSNIFF/   # stands in for a real formatter
           api: http://host.docker.internal:8787
           pull-request: "false"
       - name: Assert fetched files
         run: |
           test ! -e .tardisec.json  # path input moved them off the repo root
           cd config/tardisec
-          jq -e '.http.headers."X-Content-Type-Options" == "nosniff"' .tardisec.json
+          # The format command ran over the fetched paths, so nosniff is now upper-cased.
+          jq -e '.http.headers."X-Content-Type-Options" == "NOSNIFF"' .tardisec.json
           jq -e '.dns.TXT[""][0] == "tardisec-verification=vrfy1234"' .tardisec.json
           jq -e '.csp.directives' .tardisec.sveltekit.json
           # Slash in the name: the dir was created, and the body is the bare id, written verbatim.

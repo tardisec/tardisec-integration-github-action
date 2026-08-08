@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false  # nothing is pushed; the commit goes over the API
-      - uses: tardisec/integration-github-action@23e9d4e5663740dc0daefd417b28a7eeb31bfb36 # v1
+      - uses: tardisec/integration-github-action@c7cd9150af8f374c2999e974d903d680453d828b # v1
         with:
           domain: example.com
           files: |
@@ -58,12 +58,12 @@ filenames. Runs weekly and on demand; when nothing changed, no PR. Re-runs reset
 need a block each. A static site publishing `.well-known/` out of `static/`:
 
 ```yaml
-      - uses: tardisec/integration-github-action@23e9d4e5663740dc0daefd417b28a7eeb31bfb36 # v1
+      - uses: tardisec/integration-github-action@c7cd9150af8f374c2999e974d903d680453d828b # v1
         with:
           domain: example.com
           files: .tardisec.json
           pull-request: "false"   # let the last block open the PR
-      - uses: tardisec/integration-github-action@23e9d4e5663740dc0daefd417b28a7eeb31bfb36 # v1
+      - uses: tardisec/integration-github-action@c7cd9150af8f374c2999e974d903d680453d828b # v1
         with:
           domain: example.com
           files: .well-known/tardisec-verification.txt
@@ -71,6 +71,25 @@ need a block each. A static site publishing `.well-known/` out of `static/`:
 ```
 
 The PR step stages everything, so both blocks land in one commit.
+
+## Matching your formatter
+
+The API cannot serve a body that is clean under every formatter at once: biome wants tabs,
+prettier wants two spaces, and both collapse short arrays that `JSON.stringify` expands. The
+served files are tab-indented with a trailing newline, and `format` hands them to your own
+formatter before they are committed:
+
+```yaml
+        with:
+          domain: example.com
+          files: .tardisec.json
+          format: npx biome format --write
+```
+
+The fetched file paths are appended to the command, so only the synced files are touched;
+passing a directory would drag your whole repo into the sync PR. Formatting is
+deterministic, so a re-run produces identical bytes and no spurious diff. Without `format`,
+a repo that enforces formatting in CI will fail that check on the sync PR.
 
 The commit is created through GitHub's API rather than pushed from the runner, so it is
 **Verified** (signed server-side, still no secret to store) and carries a `Signed-off-by`
@@ -83,6 +102,7 @@ trailer for DCO.
 | `domain`       | — (required)               | Domain as configured on app.tardisec.com     |
 | `files`        | `.tardisec.json`           | Config filenames, one per line               |
 | `path`         | `.`                        | Directory to write them into                 |
+| `format`       | — (none)                   | Command run over the fetched files pre-commit |
 | `api`          | `https://api.tardisec.com` | API origin / OIDC audience                   |
 | `pull-request` | `true`                     | Set `false` to only fetch the files          |
 | `token`        | `${{ github.token }}`      | Token for the commit + PR create             |

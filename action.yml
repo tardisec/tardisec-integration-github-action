@@ -14,6 +14,11 @@ inputs:
   path:
     description: Directory to write the files into, relative to the repo root
     default: "."
+  format:
+    description: >-
+      Command run over the fetched files before they are committed, so they match your
+      repo's formatter (e.g. "npx biome format --write"). The file paths are appended.
+    default: ""
   api:
     description: API origin, also the OIDC audience
     default: https://api.tardisec.com
@@ -34,6 +39,7 @@ runs:
         TARDISEC_DOMAIN: ${{ inputs.domain }}
         TARDISEC_FILES: ${{ inputs.files }}
         TARDISEC_PATH: ${{ inputs.path }}
+        TARDISEC_FORMAT: ${{ inputs.format }}
       run: |
         OIDC=$(curl -sSf -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
           "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${TARDISEC_API}" | jq -r .value)
@@ -50,11 +56,19 @@ runs:
 
         # The path is prepended locally only; the URL always uses the allowlisted name, which
         # may itself contain a slash (.well-known/tardisec-verification.txt), hence the dirname.
+        fetched=""
         for file in ${TARDISEC_FILES}; do
           mkdir -p "$(dirname "${TARDISEC_PATH}/${file}")"
           curl -sSf -H "Authorization: Bearer ${OIDC}" \
             -o "${TARDISEC_PATH}/${file}" "${TARDISEC_API}/v1/recommendation/${TARDISEC_DOMAIN}/${file}"
+          fetched="${fetched} ${TARDISEC_PATH}/${file}"
         done
+
+        # The API cannot serve a body that is clean under every formatter, so hand the files
+        # to yours. Only the fetched paths are passed, never the directory: with path "." that
+        # would reformat the whole repo into the sync PR.
+        # shellcheck disable=SC2086  # both expansions are meant to word-split
+        [ -z "${TARDISEC_FORMAT}" ] || ${TARDISEC_FORMAT} ${fetched}
 
     - name: Open pull request
       if: inputs.pull-request == 'true'
