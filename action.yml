@@ -37,6 +37,17 @@ runs:
       run: |
         OIDC=$(curl -sSf -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
           "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${TARDISEC_API}" | jq -r .value)
+
+        # The path is relative to the repo: a leading / would write at the filesystem root
+        # and .. would climb out of the checkout, so normalize one and refuse the other.
+        TARDISEC_PATH="${TARDISEC_PATH#/}"
+        TARDISEC_PATH="${TARDISEC_PATH%/}"
+        case "${TARDISEC_PATH}" in
+          ..|../*|*/../*|*/..)
+            echo "::error::path must stay inside the repo, got '${TARDISEC_PATH}'"; exit 1 ;;
+        esac
+        TARDISEC_PATH="${TARDISEC_PATH:-.}"
+
         # The path is prepended locally only; the URL always uses the allowlisted name, which
         # may itself contain a slash (.well-known/tardisec-verification.txt), hence the dirname.
         for file in ${TARDISEC_FILES}; do

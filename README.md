@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false  # nothing is pushed; the commit goes over the API
-      - uses: tardisec/integration-github-action@0000000000000000000000000000000000000000 # v1
+      - uses: tardisec/integration-github-action@23e9d4e5663740dc0daefd417b28a7eeb31bfb36 # v1
         with:
           domain: example.com
           files: |
@@ -48,8 +48,6 @@ jobs:
             .tardisec.sveltekit.json
 ```
 
-Pin the `0000…` placeholder to the sha of the `v1` tag; the examples are written so
-[zizmor](https://docs.zizmor.sh) passes them clean.
 
 `files` is one filename per line; see the
 [integration list](https://github.com/tardisec/integration-template) for available
@@ -60,12 +58,12 @@ filenames. Runs weekly and on demand; when nothing changed, no PR. Re-runs reset
 need a block each. A static site publishing `.well-known/` out of `static/`:
 
 ```yaml
-      - uses: tardisec/integration-github-action@0000000000000000000000000000000000000000 # v1
+      - uses: tardisec/integration-github-action@23e9d4e5663740dc0daefd417b28a7eeb31bfb36 # v1
         with:
           domain: example.com
           files: .tardisec.json
           pull-request: "false"   # let the last block open the PR
-      - uses: tardisec/integration-github-action@0000000000000000000000000000000000000000 # v1
+      - uses: tardisec/integration-github-action@23e9d4e5663740dc0daefd417b28a7eeb31bfb36 # v1
         with:
           domain: example.com
           files: .well-known/tardisec-verification.txt

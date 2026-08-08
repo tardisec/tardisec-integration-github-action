@@ -13,7 +13,7 @@ jobs:
             .tardisec.json
             .tardisec.sveltekit.json
             .well-known/tardisec-verification.txt
-          path: config/tardisec
+          path: /config/tardisec/   # leading and trailing slashes are normalized away
           api: http://host.docker.internal:8787
           pull-request: "false"
       - name: Assert fetched files
