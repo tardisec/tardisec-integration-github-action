@@ -23,11 +23,17 @@ inputs:
     description: API origin, also the OIDC audience
     default: https://api.tardisec.com
   pull-request:
-    description: Commit changes to the tardisec-config branch and open a pull request
+    description: Commit changes to the sync branch and open a pull request
     default: "true"
   token:
     description: Token used to push the branch and open the pull request
     default: ${{ github.token }}
+  base:
+    description: Branch the pull request targets and the sync branch starts from
+    default: ${{ github.ref_name }}
+  branch:
+    description: Branch the synced config is committed to, reset to base on every run
+    default: tardisec-config
 
 runs:
   using: composite
@@ -58,10 +64,31 @@ runs:
         # may itself contain a slash (.well-known/tardisec-verification.txt), hence the dirname.
         fetched=""
         for file in ${TARDISEC_FILES}; do
-          mkdir -p "$(dirname "${TARDISEC_PATH}/${file}")"
-          curl -sSf -H "Authorization: Bearer ${OIDC}" \
-            -o "${TARDISEC_PATH}/${file}" "${TARDISEC_API}/v1/recommendation/${TARDISEC_DOMAIN}/${file}"
-          fetched="${fetched} ${TARDISEC_PATH}/${file}"
+          dest="${TARDISEC_PATH}/${file}"
+          mkdir -p "$(dirname "${dest}")"
+          # The ETag is the sha256 of the body, so the copy already in the repo is its own
+          # validator: nothing to cache between runs. curl drops a header whose value is empty,
+          # so a first run sends no validator at all and gets the plain 200 it always did.
+          sha=$({ sha256sum "${dest}" || shasum -a 256 "${dest}" || true; } 2>/dev/null | cut -d' ' -f1)
+          inm="If-None-Match:"
+          [ -z "${sha}" ] || inm='If-None-Match: "sha256-'"${sha}"'"'
+          # The body lands in a temp file and only a non-empty 200 moves it into place, so nothing
+          # the server answers can truncate a committed file. curl may not even create the temp
+          # file for an empty body, which -s treats the same as an empty one.
+          code=$(curl -sS -o "${dest}.part" -w '%{http_code}' \
+            -H "Authorization: Bearer ${OIDC}" -H "${inm}" \
+            "${TARDISEC_API}/v1/recommendation/${TARDISEC_DOMAIN}/${file}") || code=000
+          case "${code}" in
+            200)
+              if [ ! -s "${dest}.part" ]; then
+                rm -f "${dest}.part"; echo "::error::tardisec: ${file} returned an empty body"; exit 1
+              fi
+              mv "${dest}.part" "${dest}" ;;
+            304) rm -f "${dest}.part" ;;  # unchanged, so the committed copy stands
+            *) rm -f "${dest}.part"; echo "::error::tardisec: ${file} returned HTTP ${code}"; exit 1 ;;
+          esac
+          fetched="${fetched} ${dest}"
+          echo "${dest#./}" >> "${RUNNER_TEMP}/tardisec-fetched"  # the PR step reads every block's paths
         done
 
         # The API cannot serve a body that is clean under every formatter, so hand the files
@@ -75,42 +102,117 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
-        BRANCH: tardisec-config
+        TOKEN_IS_DEFAULT: ${{ inputs.token == github.token }}
+        BRANCH: ${{ inputs.branch }}
+        BASE: ${{ inputs.base }}
       run: |
-        git add -A  # unscoped: picks up every earlier fetch step, whatever its path
-        git diff --cached --quiet && exit 0
+        # The branch guard below recognizes this action's own commits by this headline.
+        HEADLINE="chore: sync tardisec config"
+        gh_err="${RUNNER_TEMP}/tardisec-gh-stderr"
+
+        if [ "${BRANCH}" = "${BASE}" ]; then
+          echo "::error::tardisec: branch and base are both '${BASE}', the sync would commit straight to it"; exit 1
+        fi
+        # The sync branch starts from base, not HEAD, because the checkout may be another branch.
+        if ! BASE_OID=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${BASE}" --jq .object.sha 2>/dev/null); then
+          echo "::error::tardisec: base branch '${BASE}' not found"; exit 1
+        fi
+
+        # Diff against base rather than HEAD: a 304 file matches HEAD, which may differ from base.
+        # A command substitution clears -e, so restore it: a failure in the loop has to reach the
+        # assignment, through pipefail, for the outer -e to stop the step. stdout feeds jq here,
+        # so the errors go to stderr, which the runner reads workflow commands from as well.
+        additions=$(set -e; sort -u "${RUNNER_TEMP}/tardisec-fetched" | while IFS= read -r file; do
+          uri=$(jq -rn --arg p "${file}" '$p | split("/") | map(@uri) | join("/")')
+          # Only a 404 means the file is new to base; committing past any other error would
+          # overwrite a file this run never compared.
+          if ! base_sha=$(gh api "repos/${GITHUB_REPOSITORY}/contents/${uri}?ref=${BASE_OID}" --jq .sha 2>"${gh_err}"); then
+            if ! grep -q 'HTTP 404' "${gh_err}"; then
+              echo "::error::tardisec: could not read ${file} from '${BASE}': $(head -n 1 "${gh_err}")" >&2
+              exit 1
+            fi
+            base_sha=""
+          fi
+          # Assigned on its own so -e sees a failure: inside the test, a missing file would hash
+          # to the same empty string as a file absent from base, and be skipped as unchanged.
+          file_sha=$(git hash-object -- "${file}")
+          [ "${file_sha}" = "${base_sha}" ] && continue
+          contents=$(base64 < "${file}" | tr -d '\n')
+          jq -n --arg path "${file}" --arg contents "${contents}" '$ARGS.named'
+        done | jq -sc .)
+        [ "${additions}" = "[]" ] && exit 0
 
         # Commit through the API: GitHub signs it server-side, so no key on the runner and no
-        # secret to store. The token's identity is the author, so derive the DCO signoff from it
-        # (installation tokens can't read /user, hence the github-actions[bot] fallback).
-        read -r LOGIN ID <<<"$(gh api user --jq '"\(.login) \(.id)"' 2>/dev/null \
-          || echo 'github-actions[bot] 41898282')"
-        BASE_OID=$(git rev-parse HEAD)
+        # secret to store. The token's identity is the author, so derive the DCO signoff from it.
+        if [ "${TOKEN_IS_DEFAULT}" = "true" ]; then
+          # github.token cannot read /user, and the commit's author is this bot.
+          LOGIN="github-actions[bot]" ID="41898282"
+        else
+          # No signoff means no commit: retry the lookup, then stop rather than guess an identity.
+          # On an HTTP error gh prints the error body to stdout, so only keep output from a success.
+          LOGIN="" ID=""
+          for attempt in 1 2 3; do
+            if USER_INFO=$(gh api user --jq '"\(.login) \(.id)"' 2>/dev/null); then
+              read -r LOGIN ID <<<"${USER_INFO}"
+              break
+            fi
+            if [ "${attempt}" -lt 3 ]; then sleep $((attempt * 5)); fi
+          done
+        fi
+        if [ -z "${LOGIN}" ] || ! [[ "${ID}" =~ ^[0-9]+$ ]]; then
+          echo "::error::tardisec: could not read the token identity from /user for the DCO signoff"
+          exit 1
+        fi
 
-        additions=$(git diff --cached --name-only | while IFS= read -r file; do
-          jq -n --arg path "${file}" --arg contents "$(base64 "${file}" | tr -d '\n')" '$ARGS.named'
-        done | jq -sc .)
+        # The reset below discards whatever the sync branch holds, so count the commits ahead of
+        # base that are not this action's. Use ahead_by, since the list stops at 250 commits and
+        # the rest cannot be vouched for. A merge is not counted: the PR's "Update branch" button
+        # makes one, and anything a merge brings in is listed as its own commit and counted there.
+        # Slashes stay raw: they are part of the branch name.
+        branch_uri=$(jq -rn --arg p "${BRANCH}" '$p | split("/") | map(@uri) | join("/")')
+        if compare=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${BASE_OID}...${branch_uri}" 2>"${gh_err}"); then
+          foreign=$(jq -r --arg headline "${HEADLINE}" \
+            '.ahead_by - ([.commits[] | select((.parents | length) > 1 or (.commit.message | split("\n")[0]) == $headline)] | length)' \
+            <<<"${compare}")
+        elif ! grep -q 'HTTP 404' "${gh_err}"; then
+          echo "::error::tardisec: could not compare '${BRANCH}' with '${BASE}': $(head -n 1 "${gh_err}")"
+          exit 1
+        # compare also answers 404 for a branch sharing no history with base (an orphan gh-pages),
+        # so only the ref can say the branch is absent.
+        elif gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/${branch_uri}" >/dev/null 2>"${gh_err}"; then
+          foreign="unrelated"
+        elif grep -q 'HTTP 404' "${gh_err}"; then
+          foreign=0
+        else
+          echo "::error::tardisec: could not look up branch '${BRANCH}': $(head -n 1 "${gh_err}")"
+          exit 1
+        fi
+        if [ "${foreign}" != "0" ]; then
+          echo "::error::tardisec: branch '${BRANCH}' has commits this action did not make, and every run force-resets it to '${BASE}'. Set the branch input to another name, or delete or rename that branch."
+          exit 1
+        fi
 
         # Reset the branch to the base commit, as the old force-push did; keeps re-runs to one commit.
-        gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" \
+        gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch_uri}" \
           -f sha="${BASE_OID}" -F force=true >/dev/null 2>&1 \
           || gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
                -f ref="refs/heads/${BRANCH}" -f sha="${BASE_OID}" >/dev/null
 
         jq -n --arg repo "${GITHUB_REPOSITORY}" --arg branch "${BRANCH}" --arg oid "${BASE_OID}" \
+          --arg headline "${HEADLINE}" \
           --arg body "Signed-off-by: ${LOGIN} <${ID}+${LOGIN}@users.noreply.github.com>" \
           --argjson additions "${additions}" \
           '{query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
             variables: {input: {
               branch: {repositoryNameWithOwner: $repo, branchName: $branch},
               expectedHeadOid: $oid,
-              message: {headline: "chore: sync tardisec config", body: $body},
+              message: {headline: $headline, body: $body},
               fileChanges: {additions: $additions}}}}' \
           | gh api graphql --input - >/dev/null
 
-        if [ -z "$(gh pr list --head "${BRANCH}" --base "${GITHUB_REF_NAME}" --state open \
+        if [ -z "$(gh pr list --head "${BRANCH}" --base "${BASE}" --state open \
                      --json number --jq '.[0].number')" ]; then
-          gh pr create --title "chore: sync tardisec config" --head "${BRANCH}" \
+          gh pr create --title "${HEADLINE}" --head "${BRANCH}" \
             --body "Automated config sync from tardisec.com." \
-            --base "${GITHUB_REF_NAME}"
+            --base "${BASE}"
         fi  # else the commit above already updated the open PR

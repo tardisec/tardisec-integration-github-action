@@ -1,0 +1,219 @@
+name: Release
+
+# Cuts the GitHub Release for a vX.Y.Z or vX.Y.Z-<suffix> tag, once the tag has been validated
+# and the tests pass. A stable tag repoints the major tag if it is the highest stable tag in
+# that major; a prerelease or a backport leaves the major tag where it is.
+#
+# The Marketplace *listing* is not automatable: GitHub exposes no API for it, so the first
+# publish is done once by hand (Releases -> Draft a new release -> tick "Publish this Action
+# to the GitHub Marketplace", which requires accepting the developer agreement). After that
+# the listing tracks this repository's releases, which is what this workflow creates.
+
+on:
+  push:
+    tags:
+      # Globs cannot express the real format, so this also matches junk like vfoo.bar.baz.
+      # The validate job rejects those.
+      - "v*.*.*"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          disable-telemetry: true
+          # Nothing here uses the network. An empty list would make harden-runner warn on
+          # every run that it configured no rules, so this names the narrowest real host.
+          allowed-endpoints: >
+            github.com:443
+
+      # No egress: this only inspects the tag name.
+      - name: Validate tag
+        id: tag
+        env:
+          LC_ALL: C # so A-Z below means ASCII, whatever the runner's locale
+        run: |
+          stable='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          prerelease='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*$'
+          if [[ "${GITHUB_REF_NAME}" =~ ${stable} ]]; then
+            echo "prerelease=false" >>"${GITHUB_OUTPUT}"
+          elif [[ "${GITHUB_REF_NAME}" =~ ${prerelease} ]]; then
+            echo "prerelease=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "::error::Tag '${GITHUB_REF_NAME}' is not a release tag: expected vX.Y.Z or vX.Y.Z-<suffix>"
+            exit 1
+          fi
+
+  test:
+    name: Test
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          # MANUAL REVIEW: `make test-lint` pulls the digest-pinned linter images from
+          # Docker Hub, whose CDN resolves to rotating Cloudflare and S3 hosts that a
+          # fixed allowlist cannot cover. This stays on audit; the list below is staged
+          # (NOT enforced) pending reconciliation with a real run's runtime insights.
+          egress-policy: audit
+          disable-telemetry: true
+          allowed-endpoints: >
+            auth.docker.io:443
+            github.com:443
+            index.docker.io:443
+            mirror.gcr.io:443
+            production.cloudflare.docker.com:443
+            registry-1.docker.io:443
+      # allowed-endpoints: >
+      #   github.com:443
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # allowed-endpoints: >
+      #   auth.docker.io:443
+      #   index.docker.io:443
+      #   mirror.gcr.io:443
+      #   production.cloudflare.docker.com:443
+      #   registry-1.docker.io:443
+      - name: Linting
+        run: |
+          make test-lint
+      # No egress: the test stubs gh.
+      - name: PR step test
+        run: |
+          make test-pr-step
+
+  release:
+    name: Release
+    needs: [validate, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the release, repoint the major tag
+
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: block
+          disable-telemetry: true
+          allowed-endpoints: >
+            api.github.com:443
+            github.com:443
+      # allowed-endpoints: >
+      #   github.com:443
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The Marketplace builds its listing from the tag, so a tag missing this metadata is
+      # only rejected after the release exists. Cheaper to fail here.
+      - name: Check Marketplace metadata
+        run: |
+          test -f action.yml ||
+            { echo "::error::action.yml must be at the repository root"; exit 1; }
+          grep -q '^description:' action.yml ||
+            { echo "::error::action.yml needs a description"; exit 1; }
+          grep -q '^  icon:' action.yml ||
+            { echo "::error::branding.icon is required (a Feather icon name)"; exit 1; }
+          color=$(sed -n 's/^  color: *//p' action.yml)
+          case "${color}" in
+            white | yellow | blue | green | orange | red | purple | gray-dark) ;;
+            *) echo "::error::branding.color '${color}' is not a Marketplace color"; exit 1 ;;
+          esac
+
+      # A backport must not drag the major tag backwards or become Latest. Latest is judged
+      # across every major: without --latest=false a fix to v1 would displace v2 as Latest,
+      # even though it is correct for that fix to move v1. The tag being released is counted
+      # explicitly so the result does not depend on the listing having caught up with it.
+      # allowed-endpoints: >
+      #   api.github.com:443
+      - name: Compare with existing tags
+        id: rank
+        if: needs.validate.outputs.prerelease == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          refs="repos/${GITHUB_REPOSITORY}/git/matching-refs/tags"
+          stable='.[].ref | ltrimstr("refs/tags/") | select(test("^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"))'
+          major="${GITHUB_REF_NAME%%.*}" # v1.2.3 -> v1
+          # matching-refs is a prefix match, so the trailing dot is what keeps v10.0.0 out of v1.
+          in_major=$(gh api --paginate "${refs}/${major}." --jq "${stable}")
+          overall=$(gh api --paginate "${refs}/v" --jq "${stable}")
+          highest_in_major=$(printf '%s\n' "${in_major}" "${GITHUB_REF_NAME}" | sort -V | tail -n 1)
+          highest_overall=$(printf '%s\n' "${overall}" "${GITHUB_REF_NAME}" | sort -V | tail -n 1)
+
+          if [[ "${highest_in_major}" == "${GITHUB_REF_NAME}" ]]; then
+            echo "move-major=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "move-major=false" >>"${GITHUB_OUTPUT}"
+            echo "::notice::${GITHUB_REF_NAME} is older than ${highest_in_major}; leaving ${major} where it is"
+          fi
+
+          if [[ "${highest_overall}" == "${GITHUB_REF_NAME}" ]]; then
+            echo "latest=true" >>"${GITHUB_OUTPUT}"
+          else
+            echo "latest=false" >>"${GITHUB_OUTPUT}"
+            echo "::notice::${GITHUB_REF_NAME} is older than ${highest_overall}; not marking this release Latest"
+          fi
+
+      # allowed-endpoints: >
+      #   api.github.com:443
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          LATEST: ${{ steps.rank.outputs.latest }}
+        run: |
+          flags=()
+          if [[ "${PRERELEASE}" == "true" ]]; then
+            flags+=(--prerelease)
+          elif [[ "${LATEST}" == "false" ]]; then
+            flags+=(--latest=false)
+          fi
+          gh release create "${GITHUB_REF_NAME}" --verify-tag --generate-notes "${flags[@]}"
+
+      # Consumers are told to pin by sha; the major tag exists so the `# v1` comment beside
+      # those shas resolves to something real. Skipped for prereleases and backports.
+      # allowed-endpoints: >
+      #   api.github.com:443
+      - name: Repoint the major tag
+        if: steps.rank.outputs.move-major == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          major="${GITHUB_REF_NAME%%.*}" # v1.2.3 -> v1
+          # Only a 404 means absent. Anything else (auth, rate limit, outage) must fail here
+          # rather than fall through to a POST that reports "Reference already exists".
+          if lookup=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${major}" --silent 2>&1); then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${major}" \
+              -f sha="${GITHUB_SHA}" -F force=true --silent
+          elif [[ "${lookup}" == *"HTTP 404"* ]]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${major}" -f sha="${GITHUB_SHA}" --silent
+          else
+            echo "::error::Could not look up refs/tags/${major}: ${lookup}"
+            exit 1
+          fi

@@ -26,6 +26,8 @@ const files = {
 	// Allowlisted name that carries a slash, so the fetch loop has to create the directory.
 	// Served verbatim as the bare id, no `tardisec-verification=` prefix (config-files.js).
 	".well-known/tardisec-verification.txt": "vrfy1234\n",
+	// A 200 with no body: the fetch has to refuse it rather than truncate the committed copy.
+	".tardisec.empty.json": "",
 };
 
 createServer((req, res) => {
@@ -41,8 +43,8 @@ createServer((req, res) => {
 		return;
 	}
 	const match = url.pathname.match(/^\/v1\/recommendation\/example\.com\/(.+)$/);
-	const body = match && files[match[1]];
-	if (!body) {
+	const body = match ? files[match[1]] : undefined;
+	if (body === undefined) {
 		res.writeHead(404).end();
 		return;
 	}
@@ -51,7 +53,14 @@ createServer((req, res) => {
 		return;
 	}
 	const etag = `"sha256-${createHash("sha256").update(body).digest("hex")}"`;
-	if (req.headers["if-none-match"] === etag) {
+	const conditional = req.headers["if-none-match"];
+	// A validator that is not a well-formed entity-tag means the caller mangled its quoting.
+	// Answering 200 would hide that as an ordinary cache miss, so fail the run instead.
+	if (conditional !== undefined && !/^"sha256-[0-9a-f]{64}"$/.test(conditional)) {
+		res.writeHead(400).end();
+		return;
+	}
+	if (conditional === etag) {
 		res.writeHead(304, { etag }).end();
 		return;
 	}

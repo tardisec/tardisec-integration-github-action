@@ -20,24 +20,39 @@ jobs:
   trivy-vuln:
     name: 'Trivy: SCA'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
           disable-telemetry: true
           allowed-endpoints: >
-            github.com:443
             api.github.com:443
-            objects.githubusercontent.com:443
-            release-assets.githubusercontent.com:443
+            check.trivy.dev:443
+            get.trivy.dev:443
             ghcr.io:443
-            pkg-containers.githubusercontent.com:443
+            github.com:443
             mirror.gcr.io:443
+            objects.githubusercontent.com:443
+            pkg-containers.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+      # allowed-endpoints: >
+      #   github.com:443
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # allowed-endpoints: >
+      #   api.github.com:443
+      #   check.trivy.dev:443
+      #   get.trivy.dev:443
+      #   ghcr.io:443
+      #   github.com:443
+      #   mirror.gcr.io:443
+      #   objects.githubusercontent.com:443
+      #   pkg-containers.githubusercontent.com:443
+      #   release-assets.githubusercontent.com:443
       - name: Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -52,25 +67,41 @@ jobs:
   trivy-license:
     name: 'Trivy: Licensing'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
           disable-telemetry: true
           allowed-endpoints: >
-            github.com:443
             api.github.com:443
-            objects.githubusercontent.com:443
-            release-assets.githubusercontent.com:443
-            raw.githubusercontent.com:443
+            check.trivy.dev:443
+            get.trivy.dev:443
             ghcr.io:443
-            pkg-containers.githubusercontent.com:443
+            github.com:443
             mirror.gcr.io:443
+            objects.githubusercontent.com:443
+            pkg-containers.githubusercontent.com:443
+            raw.githubusercontent.com:443
+            release-assets.githubusercontent.com:443
+      # allowed-endpoints: >
+      #   github.com:443
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # allowed-endpoints: >
+      #   api.github.com:443
+      #   check.trivy.dev:443
+      #   get.trivy.dev:443
+      #   ghcr.io:443
+      #   github.com:443
+      #   mirror.gcr.io:443
+      #   objects.githubusercontent.com:443
+      #   pkg-containers.githubusercontent.com:443
+      #   raw.githubusercontent.com:443
+      #   release-assets.githubusercontent.com:443
       - name: Trivy
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -87,6 +118,7 @@ jobs:
   semgrep:
     name: 'semgrep: SAST'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     container:
       # https://hub.docker.com/r/semgrep/semgrep/tags
@@ -95,7 +127,7 @@ jobs:
     steps:
       # harden-runner skipped: this job runs in a container; harden-runner patches the host runner.
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -106,25 +138,51 @@ jobs:
   actionlint:
     name: 'actionlint: GitHub Actions lint'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          # MANUAL REVIEW: actionlint downloads its binary (GitHub releases) and
+          # pyflakes (PyPI). Staying on audit; list below is staged (NOT enforced)
+          # pending reconciliation with runtime insights.
+          egress-policy: audit
+          disable-telemetry: true
+          allowed-endpoints: >
+            api.github.com:443
+            files.pythonhosted.org:443
+            github.com:443
+            objects.githubusercontent.com:443
+            pypi.org:443
+            release-assets.githubusercontent.com:443
+      # allowed-endpoints: >
+      #   github.com:443
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # allowed-endpoints: >
+      #   api.github.com:443
+      #   files.pythonhosted.org:443
+      #   github.com:443
+      #   objects.githubusercontent.com:443
+      #   pypi.org:443
+      #   release-assets.githubusercontent.com:443
       - name: actionlint
-        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8 # v2.1.2
+        uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2.2.0
 
   # https://github.com/zizmorcore/zizmor-action
   # SPVS V3.1.5 - build systems regularly reviewed for security misconfigurations
   zizmor:
     name: 'zizmor: SAST GitHub Actions'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       security-events: write
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           # MANUAL REVIEW: zizmor-action downloads the zizmor tool (uv/astral, PyPI)
           # and queries the GitHub API. Staying on audit; list below is staged
@@ -132,41 +190,56 @@ jobs:
           egress-policy: audit
           disable-telemetry: true
           allowed-endpoints: >
-            github.com:443
             api.github.com:443
-            objects.githubusercontent.com:443
-            release-assets.githubusercontent.com:443
-            astral.sh:443
-            pypi.org:443
-            files.pythonhosted.org:443
+            ghcr.io:443
+            github.com:443
+            pkg-containers.githubusercontent.com:443
+      # allowed-endpoints: >
+      #   github.com:443
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # allowed-endpoints: >
+      #   api.github.com:443
+      #   ghcr.io:443
+      #   github.com:443
+      #   pkg-containers.githubusercontent.com:443
       - name: zizmor
-        uses: zizmorcore/zizmor-action@b1d7e1fb5de872772f31590499237e7cce841e8e # v0.5.3
+        uses: zizmorcore/zizmor-action@3dc1ecc9bcb9e94e9b2c709687979e1298497054 # v0.6.2
 
   # https://github.com/trufflesecurity/trufflehog
   trufflehog:
     name: 'TruffleHog: secrets'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: (github.actor != 'dependabot[bot]')
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           # MANUAL REVIEW: do NOT switch to block. TruffleHog --only-verified
           # validates candidate secrets against arbitrary third-party APIs, so a
           # fixed egress allowlist would break verification by design.
           egress-policy: audit
           disable-telemetry: true
+          allowed-endpoints: >
+            ghcr.io:443
+            github.com:443
+            pkg-containers.githubusercontent.com:443
+      # allowed-endpoints: >
+      #   github.com:443
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+      # allowed-endpoints: >
+      #   ghcr.io:443
+      #   github.com:443
+      #   pkg-containers.githubusercontent.com:443
       - name: TruffleHog
-        uses: trufflesecurity/trufflehog@17456f8c7d042d8c82c9a8ca9e937231f9f42e26 # v3.95.2
+        uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb # v3.99.8
         with:
           extra_args: --only-verified --results=verified,unknown
 
@@ -174,27 +247,52 @@ jobs:
   gitleaks:
     name: 'gitleaks: secrets'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: (github.actor != 'dependabot[bot]')
+    env:
+      GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@a5ad31d6a139d249332a2605b85202e8c0b78450 # v2.19.1
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           # MANUAL REVIEW: gitleaks-action downloads the gitleaks binary (GitHub
-          # releases) and calls the GitHub API. Staying on audit; list below is
-          # staged (NOT enforced) pending reconciliation with runtime insights.
+          # releases), calls the GitHub API, and validates the v3 licence against
+          # keygen. Staying on audit; list below is staged (NOT enforced) pending
+          # reconciliation with runtime insights.
           egress-policy: audit
           disable-telemetry: true
           allowed-endpoints: >
-            github.com:443
             api.github.com:443
+            api.keygen.sh:443
+            github.com:443
             objects.githubusercontent.com:443
             release-assets.githubusercontent.com:443
+      - name: Require GITLEAKS_LICENSE
+        if: env.GITLEAKS_LICENSE == '' && github.event.pull_request.head.repo.fork != true && github.actor != 'dependabot[bot]'
+        run: |
+          echo "::error::GITLEAKS_LICENSE secret is not set; gitleaks cannot run"
+          exit 1
+      - name: Note gitleaks skipped on fork PR
+        if: env.GITLEAKS_LICENSE == '' && github.event.pull_request.head.repo.fork == true
+        run: |
+          echo "::notice::gitleaks skipped: fork PRs cannot read GITLEAKS_LICENSE. TruffleHog still scans this PR."
+      # allowed-endpoints: >
+      #   github.com:443
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        if: env.GITLEAKS_LICENSE != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+      # allowed-endpoints: >
+      #   api.github.com:443
+      #   api.keygen.sh:443
+      #   github.com:443
+      #   objects.githubusercontent.com:443
+      #   release-assets.githubusercontent.com:443
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        if: env.GITLEAKS_LICENSE != ''
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}

@@ -20,6 +20,9 @@ jobs:
       - name: Assert fetched files
         run: |
           test ! -e .tardisec.json  # path input moved them off the repo root
+          # The PR step diffs this list against base, so the paths are repo-relative.
+          grep -qx config/tardisec/.tardisec.json "${RUNNER_TEMP}/tardisec-fetched"
+          grep -qx config/tardisec/.well-known/tardisec-verification.txt "${RUNNER_TEMP}/tardisec-fetched"
           cd config/tardisec
           # The format command ran over the fetched paths, so nosniff is now upper-cased.
           jq -e '.http.headers."X-Content-Type-Options" == "NOSNIFF"' .tardisec.json
@@ -27,3 +30,72 @@ jobs:
           jq -e '.csp.directives' .tardisec.sveltekit.json
           # Slash in the name: the dir was created, and the body is the bare id, written verbatim.
           test "$(cat .well-known/tardisec-verification.txt)" = vrfy1234
+          # Backdate the files, and a reference stamped a minute later, so anything the next
+          # run rewrites (at "now") is unambiguously newer than the reference.
+          touch -t 202001010000 .tardisec.json .well-known/tardisec-verification.txt
+          touch -t 202001010001 /tmp/mtime-ref
+      # Second pull, this time with no formatter, so only curl can touch a file.
+      - uses: ./
+        with:
+          domain: example.com
+          files: |
+            .tardisec.json
+            .well-known/tardisec-verification.txt
+          path: /config/tardisec/
+          api: http://host.docker.internal:8787
+          pull-request: "false"
+      - name: Assert the conditional request
+        run: |
+          cd config/tardisec
+          # The unchanged file answered 304, so the committed copy must still be here: same
+          # bytes, non-empty, never rewritten. This is the data-loss guard.
+          test "$(cat .well-known/tardisec-verification.txt)" = vrfy1234
+          test -s .well-known/tardisec-verification.txt
+          test -z "$(find .well-known/tardisec-verification.txt -newer /tmp/mtime-ref)"
+          # No temp file is left behind in the checkout.
+          test ! -e .well-known/tardisec-verification.txt.part
+          test ! -e .tardisec.json.part
+          # The formatted .tardisec.json no longer hashes to what the API serves, so it is a
+          # plain 200 and gets rewritten: proof the no-match path still fetches.
+          test -n "$(find .tardisec.json -newer /tmp/mtime-ref)"
+          test -s .tardisec.json
+      # A failed fetch must leave the committed files alone. The mock serves example.com only,
+      # so another domain is a 404; continue-on-error keeps the job alive to inspect the result.
+      - id: badfetch
+        continue-on-error: true
+        uses: ./
+        with:
+          domain: absent.example.com
+          files: .well-known/tardisec-verification.txt
+          path: /config/tardisec/
+          api: http://host.docker.internal:8787
+          pull-request: "false"
+      - name: Assert the failed fetch changed nothing
+        env:
+          OUTCOME: ${{ steps.badfetch.outcome }}
+        run: |
+          test "${OUTCOME}" = failure
+          cd config/tardisec
+          test "$(cat .well-known/tardisec-verification.txt)" = vrfy1234
+          test -s .well-known/tardisec-verification.txt
+          test -z "$(find . -name '*.part')"
+      # A 200 with an empty body must fail the fetch, not replace the committed copy with 0 bytes.
+      - name: Stand in for a committed copy of the file the mock serves empty
+        run: printf 'committed\n' > config/tardisec/.tardisec.empty.json
+      - id: emptyfetch
+        continue-on-error: true
+        uses: ./
+        with:
+          domain: example.com
+          files: .tardisec.empty.json
+          path: /config/tardisec/
+          api: http://host.docker.internal:8787
+          pull-request: "false"
+      - name: Assert the empty body changed nothing
+        env:
+          OUTCOME: ${{ steps.emptyfetch.outcome }}
+        run: |
+          test "${OUTCOME}" = failure
+          cd config/tardisec
+          test "$(cat .tardisec.empty.json)" = committed
+          test -z "$(find . -name '*.part')"

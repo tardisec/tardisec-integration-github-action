@@ -1,8 +1,9 @@
 # Every linter runs in a digest-pinned container, so a local run and the CI job execute
 # the same tool at the same version. The workflows call these targets, so CI and local
-# runs cannot drift. Requires: docker.
+# runs cannot drift. Requires: docker. test-pr-step is a test rather than a linter and runs
+# on the host instead, see below.
 .PHONY: lint test test-lint test-lint-actionlint test-lint-yamllint test-lint-shellcheck \
-        test-sast test-sast-trivy test-sast-trivy-license test-sast-semgrep \
+        test-pr-step test-sast test-sast-trivy test-sast-trivy-license test-sast-semgrep \
         test-sast-gitleaks test-sast-trufflehog
 
 DOCKER_RUN = docker run --rm -v "$(CURDIR)":/repo -w /repo
@@ -20,7 +21,7 @@ SEMGREP_IMAGE = semgrep/semgrep@sha256:3e6e5065d9e68abffddffdb536a8db2d79a8fa92d
 # https://hub.docker.com/r/zricethezav/gitleaks/tags
 GITLEAKS_IMAGE = zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f # v8.30.1
 # https://hub.docker.com/r/trufflesecurity/trufflehog/tags
-TRUFFLEHOG_IMAGE = trufflesecurity/trufflehog@sha256:aa821cf4ace8861c7d096d83818cdf7bb9719028a52d37a52eaad44086a52577 # v3.96.0
+TRUFFLEHOG_IMAGE = trufflesecurity/trufflehog@sha256:674b2f187620a19df77f44cf9a7d77efcc581a5662accef2f2739cbb46ba4a3a # v3.99.8
 
 # Any file whose first line is a shell shebang, whatever its extension. Catching these by
 # shebang rather than by name is what covers extensionless hooks such as hooks/command.
@@ -39,7 +40,7 @@ SHELL_FRAGMENTS = $(shell find . -path ./.git -prune -o -type f -name '*.sh' -pr
       head -n 1 "$$f" 2>/dev/null | grep -qE '^\#!' || echo "$$f"; \
     done | sort -u)
 
-test: test-lint test-sast
+test: test-lint test-pr-step test-sast
 
 # There is nothing to autoformat in a config-only repo; lint is the same as test-lint.
 lint: test-lint
@@ -66,6 +67,10 @@ test-lint-shellcheck:
 	  $(DOCKER_RUN) $(SHELLCHECK_IMAGE) shellcheck --shell=sh --color=always $(SHELL_FRAGMENTS); \
 	fi
 	@test -n "$(SHELL_FILES)$(SHELL_FRAGMENTS)" || echo 'shellcheck: no shell files'
+
+# Exercises action.yml's PR step with gh stubbed. Needs bash, git and jq, not a container.
+test-pr-step:
+	bash test/pr-step.sh
 
 # Local mirror of test-sast.yml. CI runs the pinned actions; these targets run the same
 # tools from pinned images so a finding can be reproduced without pushing a branch.
