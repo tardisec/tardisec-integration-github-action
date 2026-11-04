@@ -42,9 +42,7 @@ ref_exists() {
 }
 case "$*" in
   "api user "*)
-    tries=$(($(cat "${GH_LOG}.user" 2>/dev/null || echo 0) + 1))
-    echo "${tries}" > "${GH_LOG}.user"
-    if [ "${tries}" -le "${STUB_USER_FAILS:-0}" ]; then
+    if [ -n "${STUB_USER_403:-}" ]; then
       http_error 403 "Resource not accessible by integration"
     fi
     echo "alice 123"
@@ -105,12 +103,7 @@ case "$*" in
     ;;
 esac
 STUB
-# The backoff is asserted, not waited out.
-cat > "${STUBS}/sleep" <<'STUB'
-#!/bin/bash
-echo "$1" >> "${GH_LOG}.sleep"
-STUB
-chmod +x "${STUBS}/gh" "${STUBS}/sleep"
+chmod +x "${STUBS}/gh"
 
 # Binary, CRLF, no trailing newline, and long enough that base64 wraps its output.
 exact_bytes() {
@@ -190,7 +183,7 @@ run_step() {
     if [ -n "${PREPARE:-}" ]; then "${PREPARE}"; fi
     env PATH="${STUBS}:${PATH}" GH_LOG="${LOG}" BASETREE="${DIR}/base" STUB_BASE_OID="${BASE_OID}" \
       RUNNER_TEMP="${DIR}/temp" GITHUB_REPOSITORY=o/r GH_TOKEN=stub \
-      TOKEN_IS_DEFAULT=false BRANCH=tardisec-config BASE=main "$@" \
+      BRANCH=tardisec-config BASE=main "$@" \
       bash --noprofile --norc -eo pipefail "${STEP}"
   ) > "${DIR}/out" 2>&1 < /dev/null
   RC=$?
@@ -204,9 +197,11 @@ SYNC_MESSAGE="${HEADLINE}
 Signed-off-by: alice <123+alice@users.noreply.github.com>"
 
 # --- token identity
-run_step "default token signs off as the bot" TOKEN_IS_DEFAULT=true
+# github.token gets a 403 from /user. gh prints that error body to stdout, and it must not reach
+# the signoff.
+run_step "token that cannot read /user signs off as the bot" STUB_USER_403=1
 assert_exit 0
-assert_eq "/user calls" 0 "$(user_calls)"
+assert_eq "/user calls" 1 "$(user_calls)"
 assert_eq "signoff" 'Signed-off-by: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>' \
   "$(mutation .message.body)"
 assert_eq "headline" "${HEADLINE}" "$(mutation .message.headline)"
@@ -226,18 +221,6 @@ if cmp -s "${DIR}/expected" "${DIR}/decoded"; then ok; else fail "contents do no
 # GNU base64 wraps at 76 columns, and decoding would not notice.
 assert_eq "base64 is one line" false "$(mutation '[.fileChanges.additions[].contents | contains("\n")] | any')"
 assert_eq "new file contents" first "$(mutation '.fileChanges.additions[] | select(.path == "added.json").contents' | base64 --decode)"
-
-run_step "non-default token, /user 403 on every attempt" STUB_USER_FAILS=99
-assert_exit 1
-assert_eq "/user calls" 3 "$(user_calls)"
-assert_eq "backoff" "5 10" "$(tr '\n' ' ' < "${LOG}.sleep" | sed 's/ $//')"
-assert_out "::error::tardisec: could not read the token identity"
-assert_no_writes
-
-run_step "non-default token, /user recovers on a retry" STUB_USER_FAILS=1
-assert_exit 0
-assert_eq "/user calls" 2 "$(user_calls)"
-assert_eq "signoff" 'Signed-off-by: alice <123+alice@users.noreply.github.com>' "$(mutation .message.body)"
 
 # --- nothing to do, and refusing to start
 base_matches_work() {

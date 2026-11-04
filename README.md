@@ -125,10 +125,10 @@ instead.
 
 The commit is created through GitHub's API rather than pushed from the runner, so it is
 **Verified** (signed server-side, still no secret to store) and carries a `Signed-off-by`
-trailer for DCO. The default `github.token` signs off as `github-actions[bot]`, so no secret
-is needed. Any other `token` signs off with its identity from `GET /user`. If that lookup
-still fails after 3 attempts, the step fails without committing, which is what a GitHub App
-installation token does, since it cannot read `/user`.
+trailer for DCO. The trailer comes from the token's identity on `GET /user`. A failed lookup
+falls back to `github-actions[bot]`, which is correct for the default `github.token` since it
+cannot read `/user`, so no secret is needed. With any other token, a failed lookup means the
+trailer names the bot rather than the commit's author.
 
 ## Inputs
 

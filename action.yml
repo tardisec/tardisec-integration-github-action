@@ -102,7 +102,6 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.token }}
-        TOKEN_IS_DEFAULT: ${{ inputs.token == github.token }}
         BRANCH: ${{ inputs.branch }}
         BASE: ${{ inputs.base }}
       run: |
@@ -144,25 +143,10 @@ runs:
 
         # Commit through the API: GitHub signs it server-side, so no key on the runner and no
         # secret to store. The token's identity is the author, so derive the DCO signoff from it.
-        if [ "${TOKEN_IS_DEFAULT}" = "true" ]; then
-          # github.token cannot read /user, and the commit's author is this bot.
-          LOGIN="github-actions[bot]" ID="41898282"
-        else
-          # No signoff means no commit: retry the lookup, then stop rather than guess an identity.
-          # On an HTTP error gh prints the error body to stdout, so only keep output from a success.
-          LOGIN="" ID=""
-          for attempt in 1 2 3; do
-            if USER_INFO=$(gh api user --jq '"\(.login) \(.id)"' 2>/dev/null); then
-              read -r LOGIN ID <<<"${USER_INFO}"
-              break
-            fi
-            if [ "${attempt}" -lt 3 ]; then sleep $((attempt * 5)); fi
-          done
-        fi
-        if [ -z "${LOGIN}" ] || ! [[ "${ID}" =~ ^[0-9]+$ ]]; then
-          echo "::error::tardisec: could not read the token identity from /user for the DCO signoff"
-          exit 1
-        fi
+        # github.token cannot read /user, and this bot is the author of its commits. Assign rather
+        # than append the fallback: on an HTTP error gh prints the error body to stdout.
+        USER_INFO=$(gh api user --jq '"\(.login) \(.id)"' 2>/dev/null) || USER_INFO='github-actions[bot] 41898282'
+        read -r LOGIN ID <<<"${USER_INFO}"
 
         # The reset below discards whatever the sync branch holds, so count the commits ahead of
         # base that are not this action's. Use ahead_by, since the list stops at 250 commits and
